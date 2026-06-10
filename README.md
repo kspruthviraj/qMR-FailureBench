@@ -62,8 +62,7 @@ python run_qmrlab_validation.py
 ├── scripts/                              # All experiment scripts
 ├── tests/                                # Unit tests
 ├── paper/
-│   ├── main.tex                          # LaTeX source
-│   └── TODO.md                           # Development tracking
+│   └── main.tex                          # LaTeX source
 ├── upload/
 │   ├── zenodo_benchmark/                 # Ready for Zenodo upload (1.3 GB)
 │   └── arxiv/                            # Ready for arXiv upload (4.5 MB)
