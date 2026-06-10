@@ -3,6 +3,7 @@
 **The Sim-to-Real Uncertainty Gap in Quantitative MRI: Characterization, Benchmark, and Counterfactual Correction**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20632105.svg)](https://doi.org/10.5281/zenodo.20632105)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 
@@ -90,10 +91,12 @@ python run_qmrlab_validation.py
 ## Citation
 
 ```bibtex
-@article{kyathanahally2026simtoreal,
-  title={The Sim-to-Real Uncertainty Gap in Quantitative MRI: Characterization, Benchmark, and Counterfactual Correction},
-  author={Kyathanahally, Sreenath},
-  year={2026}
+@dataset{qmrfailurebench2026,
+  title={qMR-FailureBench: A Benchmark for Explainable Failure Forecasting and Counterfactual Correction in Quantitative MRI},
+  author={Kyathanahally, Sreenath P},
+  year={2026},
+  doi={10.5281/zenodo.20632105},
+  url={https://doi.org/10.5281/zenodo.20632105}
 }
 ```
 
