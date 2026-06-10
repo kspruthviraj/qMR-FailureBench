@@ -39,34 +39,57 @@ python run_qmrlab_validation.py
 ## Project Structure
 
 ```
+├── .gitignore                              # Excludes data, results, checkpoints
+├── LICENSE                                 # MIT License
+├── README.md                               # This file
+├── requirements.txt                        # Python dependencies
+├── configs/
+│   └── config.yaml                         # Full configuration
 ├── qMR_Robust/
 │   ├── simulators/
-│   │   ├── manager.py                    # MRF Bloch + MRS Lorentzian simulation
-│   │   └── corruptor.py                  # PhysicsCorruptor (entangled B0/B1/motion)
+│   │   ├── manager.py                      # MRF Bloch + MRS Lorentzian simulation
+│   │   └── corruptor.py                    # PhysicsCorruptor (entangled B0/B1/motion)
 │   ├── models/
-│   │   ├── resnet1d.py                   # ResNet-1D with evidential NIG head
-│   │   ├── vit1d.py                      # ViT-1D with evidential NIG head
-│   │   ├── spatiotemporal_transformer.py # Spatio-Temporal Transformer
-│   │   ├── losses.py                     # NIG NLL + Evidential Regularizer
-│   │   ├── baselines.py                  # MC-Dropout, Ensemble, Quantile, Heteroscedastic
-│   │   ├── corruption_attribution.py     # Dual-head attribution model
-│   │   ├── severity_regression.py        # Severity regression + counterfactual correction
-│   │   └── physics_aware_loss.py         # SNR-anchored evidential loss
+│   │   ├── resnet1d.py                     # ResNet-1D with evidential NIG head
+│   │   ├── vit1d.py                        # ViT-1D with evidential NIG head
+│   │   ├── spatiotemporal_transformer.py   # Spatio-Temporal Transformer
+│   │   ├── losses.py                       # NIG NLL + Evidential Regularizer
+│   │   ├── baselines.py                    # MC-Dropout, Ensemble, Quantile, Heteroscedastic
+│   │   ├── corruption_attribution.py       # Dual-head attribution model
+│   │   ├── severity_regression.py          # Severity regression + counterfactual correction
+│   │   ├── physics_aware_loss.py           # SNR-anchored evidential loss
+│   │   └── registry.py                     # Model factory
 │   ├── eval/
-│   │   ├── forecaster.py                 # Failure detection + correction pipeline
-│   │   └── metrics.py                    # Calibration, AUROC, reliability diagrams
+│   │   ├── forecaster.py                   # Failure detection + correction pipeline
+│   │   └── metrics.py                      # Calibration, AUROC, reliability diagrams
 │   └── benchmark/
-│       └── __init__.py                   # qMR-FailureBench packaging
-├── configs/
-│   └── config.yaml                       # Full configuration
-├── scripts/                              # All experiment scripts
-├── tests/                                # Unit tests
-├── paper/
-│   └── main.tex                          # LaTeX source
-├── upload/
-│   ├── zenodo_benchmark/                 # Ready for Zenodo upload (1.3 GB)
-│   └── arxiv/                            # Ready for arXiv upload (4.5 MB)
-└── data/                                 # (gitignored — generated/downloaded)
+│       └── __init__.py                     # qMR-FailureBench packaging
+├── scripts/
+│   ├── run_experiment.py                   # Data generation + baseline training
+│   ├── run_v3_final.py                     # Full experiment suite
+│   ├── run_novel_experiments.py            # Dual-head + attribution experiments
+│   ├── run_qmrlab_validation.py            # Real in-vivo MRF validation
+│   ├── run_biggaba_mrs.py                  # Real MRS validation (Big GABA)
+│   ├── run_sim_to_real_gap.py              # Sim-to-real gap characterization
+│   ├── run_adaptation_curve.py             # Calibration repair scaling law
+│   ├── run_final_analysis.py               # Ensemble diagnostic + counterfactual stats
+│   ├── run_all_experiments.py              # Comprehensive experiment runner
+│   ├── run_phase123.py                     # Selective prediction + cross-vendor/field
+│   ├── run_v2_upgrades.py                  # Severity regression + counterfactual
+│   ├── run_real_data_validation.py         # qMRLab zero-shot validation
+│   ├── fix_all_figures.py                  # Re-render figures with A4-printable fonts
+│   ├── write_paper_pruned.py               # Paper compilation script
+│   └── write_final_paper.py                # Paper compilation (alternative)
+├── tests/
+│   └── test_failure_forecast.py            # Unit tests
+└── paper/
+    ├── main.tex                            # LaTeX source
+    └── main.pdf                            # Compiled PDF
+```
+
+**Data and checkpoints** are gitignored. Generate with:
+```bash
+python scripts/run_experiment.py
 ```
 
 ## Key Results
