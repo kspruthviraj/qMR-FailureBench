@@ -28,8 +28,9 @@
 }
 
 \title{\textbf{The Sim-to-Real Uncertainty Gap in Quantitative MRI:\\Characterization, Benchmark, and Counterfactual Correction}}
-\author{Sreenath Kyathanahally}
-\date{June 2026}
+\author{Sreenath P.\ Kyathanahally}
+\date{}
+\date{}
 
 \begin{document}
 \maketitle
@@ -64,6 +65,7 @@ Consider a radiologist who has trained exclusively on textbook cases from a sing
 (2)~We release \textbf{qMR-FailureBench} (60K signals, 5 tasks, \url{https://doi.org/10.5281/zenodo.20632105}) as a standardized evaluation framework.
 (3)~We build a system that \textbf{detects, explains, and corrects} failures, reducing errors by 39.6\%.
 (4)~We observe this gap in both MRF and a preliminary MRS study, suggesting a systemic property of physics-informed evidential networks.
+All code is available at \url{https://github.com/kspruthviraj/qMR-FailureBench}.
 
 \section{Background and Related Work}
 \label{sec:related}
@@ -375,6 +377,10 @@ The system outputs per voxel: (1)~tissue parameter, (2)~uncertainty, (3)~corrupt
 \section{Conclusion}
 
 The central lesson is simple: \emph{synthetic data may be sufficient to learn MRI measurements, but it is not sufficient to learn when those measurements should be trusted.} We provide evidence for this sim-to-real uncertainty gap in qMRI, observed in both MRF and a preliminary MRS study. We show the gap is fixable with 5\% of real data, release qMR-FailureBench as a standardized evaluation framework, and demonstrate corruption-aware failure forecasting with actionable counterfactual correction. The community can now measure, repair, and build upon this phenomenon.
+
+\section*{Code and Data Availability}
+
+All source code, trained models, and the qMR-FailureBench benchmark are publicly available at \url{https://github.com/kspruthviraj/qMR-FailureBench}. The benchmark dataset is archived with a persistent DOI at \url{https://doi.org/10.5281/zenodo.20632105}.
 
 \begin{thebibliography}{35}
 \bibitem[Amini et~al.(2020)]{amini2020deep} Amini, A., Schwarting, W., Soleimany, A., \& Rus, D. (2020). Deep Evidential Regression. \emph{Advances in Neural Information Processing Systems}, 33.
