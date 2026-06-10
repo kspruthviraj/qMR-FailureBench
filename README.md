@@ -26,14 +26,20 @@ This repository provides:
 # Install dependencies
 pip install -r requirements.txt
 
-# Generate synthetic data
-python run_experiment.py
+# Step 1: Generate synthetic data
+python scripts/run_experiment.py
 
-# Run the full experiment suite
-python run_v3_final.py
+# Step 2: Run the full experiment suite (baselines, ablations, severity curves)
+python scripts/run_v3_final.py
 
-# Run the sim-to-real gap experiment (requires qMRLab data)
-python run_qmrlab_validation.py
+# Step 3: Run the sim-to-real gap experiment (requires qMRLab data)
+python scripts/run_qmrlab_validation.py
+
+# Step 4: Run the novel dual-head + attribution experiments
+python scripts/run_novel_experiments.py
+
+# Step 5: Run remaining analyses (ensemble diagnostic, counterfactual stats)
+python scripts/run_final_analysis.py
 ```
 
 ## Project Structure
@@ -65,21 +71,14 @@ python run_qmrlab_validation.py
 │   └── benchmark/
 │       └── __init__.py                     # qMR-FailureBench packaging
 ├── scripts/
-│   ├── run_experiment.py                   # Data generation + baseline training
-│   ├── run_v3_final.py                     # Full experiment suite
-│   ├── run_novel_experiments.py            # Dual-head + attribution experiments
-│   ├── run_qmrlab_validation.py            # Real in-vivo MRF validation
-│   ├── run_biggaba_mrs.py                  # Real MRS validation (Big GABA)
+│   ├── run_experiment.py                   # Step 1: Data generation + baseline training
+│   ├── run_v3_final.py                     # Step 2: Full experiment suite
+│   ├── run_novel_experiments.py            # Step 3: Dual-head + attribution
+│   ├── run_final_analysis.py               # Step 4: Ensemble diagnostic + counterfactual stats
 │   ├── run_sim_to_real_gap.py              # Sim-to-real gap characterization
 │   ├── run_adaptation_curve.py             # Calibration repair scaling law
-│   ├── run_final_analysis.py               # Ensemble diagnostic + counterfactual stats
-│   ├── run_all_experiments.py              # Comprehensive experiment runner
-│   ├── run_phase123.py                     # Selective prediction + cross-vendor/field
-│   ├── run_v2_upgrades.py                  # Severity regression + counterfactual
-│   ├── run_real_data_validation.py         # qMRLab zero-shot validation
-│   ├── fix_all_figures.py                  # Re-render figures with A4-printable fonts
-│   ├── write_paper_pruned.py               # Paper compilation script
-│   └── write_final_paper.py                # Paper compilation (alternative)
+│   ├── run_qmrlab_validation.py            # Real in-vivo MRF validation (qMRLab)
+│   └── run_biggaba_mrs.py                  # Real MRS validation (Big GABA)
 ├── tests/
 │   └── test_failure_forecast.py            # Unit tests
 └── paper/
