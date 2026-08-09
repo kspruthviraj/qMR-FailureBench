@@ -33,30 +33,41 @@ def expected_calibration_error(
     uncertainties: np.ndarray,
     residuals: np.ndarray,
     n_bins: int = 15,
+    normalize: bool = True,
 ) -> Tuple[float, np.ndarray, np.ndarray]:
     """ECE for regression: how well does predicted uncertainty match actual error?
 
     Bins samples by predicted uncertainty, then compares mean predicted
     uncertainty vs mean actual residual in each bin.
 
+    Parameters
+    ----------
+    normalize :
+        If True (default), both uncertainty and residual are divided by the
+        mean residual so ECE is dimensionless and not dominated by ms-scale
+        absolute errors (legacy raw ECE could exceed 1000).
+
     Returns
     -------
     ece : float
-        Weighted average absolute gap.
+        Weighted average absolute gap (normalized if ``normalize=True``).
     bin_means_pred : ndarray (n_bins,)
-        Mean predicted uncertainty per bin.
     bin_means_actual : ndarray (n_bins,)
-        Mean actual residual per bin.
     """
-    unc_flat = uncertainties.flatten()
-    res_flat = residuals.flatten()
+    unc_flat = uncertainties.flatten().astype(np.float64)
+    res_flat = residuals.flatten().astype(np.float64)
 
-    valid = np.isfinite(unc_flat) & np.isfinite(res_flat) & (unc_flat > 0)
+    valid = np.isfinite(unc_flat) & np.isfinite(res_flat) & (unc_flat >= 0) & (res_flat >= 0)
     unc_flat = unc_flat[valid]
     res_flat = res_flat[valid]
 
     if len(unc_flat) == 0:
         return 0.0, np.zeros(n_bins), np.zeros(n_bins)
+
+    if normalize:
+        scale = max(float(res_flat.mean()), 1e-8)
+        unc_flat = unc_flat / scale
+        res_flat = res_flat / scale
 
     # Use quantile-based bins for equal population
     bin_edges = np.percentile(unc_flat, np.linspace(0, 100, n_bins + 1))
@@ -78,7 +89,7 @@ def expected_calibration_error(
             bin_counts[b] = mask.sum()
 
     total = bin_counts.sum()
-    weights = bin_counts / total
+    weights = bin_counts / max(total, 1)
     ece = float(np.sum(weights * np.abs(bin_means_pred - bin_means_actual)))
 
     return ece, bin_means_pred, bin_means_actual
@@ -373,7 +384,7 @@ def plot_2d_brain_maps(
     failure_mask: np.ndarray,
     output_dir: Path,
 ) -> None:
-    """Generate multi-panel brain map figure for the paper."""
+    """Generate a multi-panel brain map diagnostic."""
     mask = phantom["mask"]
 
     fig, axes = plt.subplots(2, 4, figsize=(20, 10))

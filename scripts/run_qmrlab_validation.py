@@ -16,6 +16,7 @@ to download any external datasets.
 """
 
 from __future__ import annotations
+import sys
 
 import json
 import logging
@@ -35,7 +36,8 @@ import yaml
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("qmrlab")
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FIG_DIR = ROOT / "results" / "figures"
 FIG_DIR.mkdir(parents=True, exist_ok=True)

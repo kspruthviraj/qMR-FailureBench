@@ -7,11 +7,12 @@ Three-part experiment:
   Part 2: Calibration repair with minimal real data (isotonic regression)
   Part 3: "First-order vs Second-order" insight
 
-This turns the negative correlation from a weakness into the paper's
-most citable insight.
+This turns the negative correlation from a weakness into a useful
+calibration diagnostic.
 """
 
 from __future__ import annotations
+import sys
 
 import json
 import logging
@@ -34,7 +35,8 @@ from scipy.stats import spearmanr, pearsonr
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("gap")
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FIG_DIR = ROOT / "results" / "figures"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -79,33 +81,18 @@ def run_experiment():
     t_std = hf["parameters"][:n_train, :2].astype(np.float32).std(axis=0) + 1e-8
     hf.close()
 
-    # ── Extract voxels ──
-    n_fa = vfa_slice.shape[-1]
-    target_len = 1000
-
-    voxels, coords, t1_values, b1_values = [], [], [], []
-
-    for ix in range(vfa_slice.shape[0]):
-        for iy in range(vfa_slice.shape[1]):
-            if mask_slice[ix, iy] < 0.5:
-                continue
-            sig = vfa_slice[ix, iy, :]
-            sig_max = np.abs(sig).max()
-            if sig_max < 1e-6:
-                continue
-            sig_norm = sig / sig_max
-            tiled_mag = np.tile(sig_norm.real, target_len // n_fa + 1)[:target_len]
-            phase = np.linspace(0, 2 * np.pi, n_fa)
-            tiled_phase = np.tile(np.sin(phase), target_len // n_fa + 1)[:target_len]
-            sig_2ch = np.stack([tiled_mag, tiled_phase], axis=0).astype(np.float32)
-            voxels.append(sig_2ch)
-            coords.append((ix, iy))
-            t1_values.append(t1_slice[ix, iy])
-            b1_values.append(b1_slice[ix, iy])
-
-    voxels = np.stack(voxels)
-    t1_values = np.array(t1_values)
-    b1_values = np.array(b1_values)
+    # ── Extract voxels (unit-safe: T1 seconds → milliseconds) ──
+    from qMR_Robust.data.loaders import load_qmrlab_vfa
+    real = load_qmrlab_vfa(DATA_DIR / "vfa_t1_data", pad_mode="zeropad")
+    voxels = real.signals
+    t1_values = real.t1_ms
+    coords = [tuple(c) for c in real.coords] if real.coords is not None else []
+    b1_values = real.b1_map if real.b1_map is not None else np.ones(len(t1_values), dtype=np.float32)
+    # GT map in ms for brain-map plots
+    _t1 = nib.load(str(DATA_DIR / "vfa_t1_data" / "FitResults" / "T1.nii.gz")).get_fdata()
+    t1_slice = (_t1 if _t1.ndim == 2 else _t1[:, :, 0]) * 1000.0
+    logger.info("Loaded %d voxels, T1 mean=%.1f ms, protocol=%s",
+                len(t1_values), float(t1_values.mean()), real.protocol)
 
     # ── Inference ──
     batch = torch.from_numpy(voxels).to(DEVICE)

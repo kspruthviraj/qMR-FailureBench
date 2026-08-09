@@ -20,6 +20,8 @@ import numpy as np
 import yaml
 from tqdm import tqdm
 
+from qMR_Robust.reproducibility import stable_seed
+
 logger = logging.getLogger(__name__)
 
 VENDOR_BIAS = {
@@ -69,24 +71,90 @@ def _generate_tr_schedule(variant: int, n: int, rng: np.random.RandomState) -> n
     return np.clip(np.ones(n) * 15.0, 5, 50)
 
 
+def mrf_domain_table(sim_cfg: dict) -> list[tuple[str, float, int, int]]:
+    """Return the deterministic domain ordering used by failure-forecast MRF."""
+    mrf_cfg = sim_cfg.get("mrf", sim_cfg)
+    vendors = mrf_cfg.get("vendors", ["siemens", "philips", "ge"])
+    fields = mrf_cfg.get("field_strengths", [1.5, 3.0, 7.0])
+    fa_vars = int(mrf_cfg.get("fa_schedule_variants", 5))
+    tr_vars = int(mrf_cfg.get("tr_schedule_variants", 3))
+    return [
+        (str(vendor), float(field), fa_var, tr_var)
+        for vendor in vendors
+        for field in fields
+        for fa_var in range(fa_vars)
+        for tr_var in range(tr_vars)
+    ]
+
+
+def reconstruct_mrf_sample_from_metadata(
+    sim_cfg: dict,
+    simulation_seed: int,
+    domain_id: int,
+) -> Dict[str, Any]:
+    """Recreate one deterministic MRF sample from stored provenance metadata.
+
+    This is intentionally a signal/provenance audit primitive.  It does not
+    infer labels and does not replace sequence-specific reconstruction for
+    externally acquired k-space.
+    """
+    domains = mrf_domain_table(sim_cfg)
+    domain_id = int(domain_id)
+    if domain_id < 0 or domain_id >= len(domains):
+        raise ValueError(
+            f"domain_id={domain_id} outside the configured domain table "
+            f"[0, {len(domains) - 1}]"
+        )
+    vendor, field, fa_var, tr_var = domains[domain_id]
+    return _generate_mrf_sample(
+        int(simulation_seed),
+        sim_cfg,
+        vendor,
+        field,
+        fa_var,
+        tr_var,
+    )
+
 def bloch_simulate(
     t1: float, t2: float, m0: float,
     fa: np.ndarray, tr: np.ndarray,
     b0_shift: float, b1_scale: float, n: int,
+    te_ms: float = 2.0,
 ) -> np.ndarray:
+    """Simplified hard-pulse FISP-like fingerprint simulation.
+
+    Physics notes
+    -------------
+    * ``b1_scale`` multiplies the *flip angle* (true B1+ effect), not the
+      observed signal amplitude after the fact.
+    * ``b0_shift`` (Hz) accrues phase over TE and residual free precession
+      over (TR − TE). This is still a single-isochromat model (no EPG /
+      slice profile), but B0/B1 enter the dynamics correctly.
+    * T1/T2/TR/TE are in **milliseconds**; b0_shift in **Hz**.
+    """
     signal = np.zeros(n, dtype=np.complex128)
-    mz = m0
-    fa_rad = np.deg2rad(fa) * b1_scale
-    e1 = np.exp(-tr / max(t1, 1e-6))
-    te = 2.0
-    e2_te = np.exp(-te / max(t2, 1e-6))
-    b0_phase = np.exp(1j * 2 * np.pi * b0_shift * te / 1000.0)
+    mz = float(m0)
+    # B1+ scales prescribed flip angles
+    fa_rad = np.deg2rad(np.asarray(fa, dtype=np.float64)) * float(b1_scale)
+    tr = np.asarray(tr, dtype=np.float64)
+    t1 = max(float(t1), 1e-6)
+    t2 = max(float(t2), 1e-6)
+    te = float(te_ms)
 
     for i in range(n):
+        tr_i = max(float(tr[i]), te + 0.1)
+        e1 = np.exp(-tr_i / t1)
+        e2_te = np.exp(-te / t2)
+        # Phase accrual during TE from off-resonance
+        phase_te = np.exp(1j * 2 * np.pi * b0_shift * te * 1e-3)
         mz_pre = mz
+        # Instantaneous hard RF about x-axis
         mz = mz_pre * np.cos(fa_rad[i])
-        mxy = mz_pre * np.sin(fa_rad[i]) * e2_te * b0_phase
-        mz = mz * e1[i] + m0 * (1 - e1[i])
+        mxy = mz_pre * np.sin(fa_rad[i]) * e2_te * phase_te
+        # Longitudinal recovery over TR
+        mz = mz * e1 + m0 * (1.0 - e1)
+        # Residual transverse dephasing over (TR-TE) — perfect spoiling approx
+        # (mxy discarded after readout). Signal is the TE echo only.
         signal[i] = mxy
     return signal
 
@@ -114,6 +182,7 @@ def _generate_mrf_sample(
     b1 = vb["b1_scale"] * rng.uniform(*vr["b1_scale_range"])
 
     sig = bloch_simulate(t1_s, t2_s, m0, fa, tr, b0, b1, n)
+    clean_signal = sig.astype(np.complex64)
 
     snr = rng.uniform(*vr["snr_range"]) * ff["snr_scale"]
     noise_std = np.abs(sig).max() / max(snr, 1.0)
@@ -123,10 +192,17 @@ def _generate_mrf_sample(
     domain_name = f"{vendor}_fa{fa_var}_tr{tr_var}_{field}T"
     return {
         "signal": sig,
+        "clean_signal": clean_signal,
         "params": np.array([t1, t2, m0], dtype=np.float32),
         "domain_name": domain_name,
         "vendor": vendor,
         "field_strength": field,
+        "fa": fa.astype(np.float32),
+        "tr": tr.astype(np.float32),
+        "base_b0_hz": float(b0),
+        "base_b1_scale": float(b1),
+        "t1_sim_ms": float(t1_s),
+        "t2_sim_ms": float(t2_s),
     }
 
 
@@ -176,6 +252,7 @@ def _generate_mrs_sample(
     domain_name = f"TE{te}"
     return {
         "signal": spectrum_noisy,
+        "clean_signal": spectrum_c.astype(np.complex64),
         "concentrations": concentrations,
         "domain_name": domain_name,
         "te": te,
@@ -212,8 +289,8 @@ class SimulationManager:
 
         tasks = []
         for v, f, fa, tr in combos:
-            for _ in range(per_combo):
-                tasks.append((v, f, fa, tr))
+            for k in range(per_combo):
+                tasks.append((v, f, fa, tr, k))
 
         worker_fn = partial(_mrf_worker, cfg=self.sim_cfg, base_seed=self.seed)
 
@@ -237,7 +314,7 @@ class SimulationManager:
                         dom_ds[i] = result["domain_name"].encode()
             else:
                 for i, task in enumerate(tqdm(tasks, desc="MRF")):
-                    result = _mrf_worker(task, self.sim_cfg, self.seed + i)
+                    result = _mrf_worker(task, self.sim_cfg, self.seed)
                     sig_ds[i] = result["signal"]
                     param_ds[i] = result["params"]
                     dom_ds[i] = result["domain_name"].encode()
@@ -247,6 +324,7 @@ class SimulationManager:
             hf.attrs["n_timepoints"] = n_time
             hf.attrs["vendors"] = vendors
             hf.attrs["field_strengths"] = fields
+            hf.attrs["seed_scheme"] = "stable_blake2b_v1"
 
         logger.info("MRF dictionary saved → %s  (%d signals)", out, total)
         return str(out)
@@ -269,8 +347,8 @@ class SimulationManager:
 
         tasks = []
         for te in te_values:
-            for _ in range(per_te):
-                tasks.append(te)
+            for k in range(per_te):
+                tasks.append((te, k))
 
         worker_fn = partial(_mrs_worker, cfg=self.sim_cfg, base_seed=self.seed)
 
@@ -294,7 +372,7 @@ class SimulationManager:
                         dom_ds[i] = result["domain_name"].encode()
             else:
                 for i, te_val in enumerate(tqdm(tasks, desc="MRS")):
-                    result = _mrs_worker(te_val, self.sim_cfg, self.seed + i)
+                    result = _mrs_worker(te_val, self.sim_cfg, self.seed)
                     spec_ds[i] = result["signal"]
                     conc_ds[i] = result["concentrations"]
                     dom_ds[i] = result["domain_name"].encode()
@@ -303,6 +381,7 @@ class SimulationManager:
             hf.attrs["metabolites"] = metabolites
             hf.attrs["n_points"] = n_pts
             hf.attrs["te_values"] = te_values
+            hf.attrs["seed_scheme"] = "stable_blake2b_v1"
 
         logger.info("MRS spectra saved → %s  (%d signals)", out, total)
         return str(out)
@@ -342,13 +421,21 @@ class SimulationManager:
 
 
 def _mrf_worker(task, cfg, base_seed):
-    v, f, fa, tr = task
-    seed = base_seed ^ hash((v, f, fa, tr)) % (2**31)
+    if len(task) == 5:
+        v, f, fa, tr, k = task
+    else:
+        v, f, fa, tr = task
+        k = 0
+    seed = stable_seed(base_seed, v, f, fa, tr, k)
     return _generate_mrf_sample(seed, cfg, v, f, fa, tr)
 
 
 def _mrs_worker(te, cfg, base_seed):
-    seed = base_seed ^ hash(te) % (2**31)
+    if isinstance(te, tuple):
+        te, k = te if len(te) == 2 else (te[0], 0)
+    else:
+        k = 0
+    seed = stable_seed(base_seed, float(te), k)
     return _generate_mrs_sample(seed, cfg, te)
 
 

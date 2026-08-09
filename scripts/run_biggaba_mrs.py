@@ -10,6 +10,7 @@ Proves the sim-to-real uncertainty gap replicates across modalities:
   5. Compare with synthetic test performance
 """
 from __future__ import annotations
+import sys
 
 import json
 import logging
@@ -30,7 +31,8 @@ from sklearn.isotonic import IsotonicRegression
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("biggaba")
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FIG = ROOT / "results" / "figures"
 BIGGABA = ROOT / "data" / "real" / "biggaba"

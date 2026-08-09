@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys
 """
 run_adaptation_curve.py — Calibration repair scaling law.
 
@@ -24,7 +25,8 @@ from sklearn.model_selection import train_test_split
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("adapt")
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FIG = ROOT / "results" / "figures"
 DATA_DIR = ROOT / "data" / "real" / "qmrlab"
@@ -35,39 +37,14 @@ def run():
 
     logger.info("Adaptation curve experiment")
 
-    # Load real data
-    vfa = nib.load(DATA_DIR / "vfa_t1_data" / "VFAData.nii.gz").get_fdata()
-    t1_gt = nib.load(DATA_DIR / "vfa_t1_data" / "FitResults" / "T1.nii.gz").get_fdata()
-    mask = nib.load(DATA_DIR / "vfa_t1_data" / "Mask.nii.gz").get_fdata()
-    b1_map = nib.load(DATA_DIR / "vfa_t1_data" / "B1map.nii.gz").get_fdata()
-
-    vfa_slice = vfa[:, :, 0, :] if vfa.ndim == 4 else vfa
-    t1_slice = t1_gt if t1_gt.ndim == 2 else t1_gt[:, :, 0]
-    mask_slice = mask if mask.ndim == 2 else mask[:, :, 0]
-
-    n_fa = vfa_slice.shape[-1]
-    target_len = 1000
-
-    voxels, t1_values, b1_values = [], [], []
-    for ix in range(vfa_slice.shape[0]):
-        for iy in range(vfa_slice.shape[1]):
-            if mask_slice[ix, iy] < 0.5:
-                continue
-            sig = vfa_slice[ix, iy, :]
-            sig_max = np.abs(sig).max()
-            if sig_max < 1e-6:
-                continue
-            sig_norm = sig / sig_max
-            tiled_mag = np.tile(sig_norm.real, target_len // n_fa + 1)[:target_len]
-            phase = np.linspace(0, 2 * np.pi, n_fa)
-            tiled_phase = np.tile(np.sin(phase), target_len // n_fa + 1)[:target_len]
-            voxels.append(np.stack([tiled_mag, tiled_phase], axis=0).astype(np.float32))
-            t1_values.append(t1_slice[ix, iy])
-            b1_values.append(b1_map[ix, iy])
-
-    voxels = np.stack(voxels)
-    t1_values = np.array(t1_values)
+    # Load real data (unit-safe: T1 in ms, zero-pad VFA protocol)
+    from qMR_Robust.data.loaders import load_qmrlab_vfa
+    real = load_qmrlab_vfa(DATA_DIR / "vfa_t1_data", pad_mode="zeropad")
+    voxels = real.signals
+    t1_values = real.t1_ms
+    b1_values = real.b1_map if real.b1_map is not None else np.ones(len(t1_values))
     n_total = len(voxels)
+    logger.info("Loaded %d voxels, T1 mean=%.1f ms, protocol=%s", n_total, t1_values.mean(), real.protocol)
 
     # Load model
     model = ResNet1D(in_channels=2, hidden_dim=128, output_dim=2, dropout=0.1, evidential=True).to(DEVICE)

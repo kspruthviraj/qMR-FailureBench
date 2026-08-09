@@ -7,7 +7,7 @@ Steps:
   2. Train evidential ViT on MRF (T1, T2 prediction)
   3. Train evidential ViT on MRS (GABA concentration prediction)
   4. Evaluate with Forecaster: uncertainty decomposition, failure flagging, plots
-  5. Save all metrics + figures for the paper
+  5. Save all metrics and diagnostic figures
 """
 
 from __future__ import annotations
@@ -35,7 +35,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run_experiment")
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from qMR_Robust.reproducibility import seed_everything
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -194,7 +196,9 @@ def train_evidential(
 
             optimizer.zero_grad()
             result["loss"].backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), float(cfg.get("training", {}).get("gradient_clip_val", 5.0))
+            )
             optimizer.step()
 
             epoch_loss += result["loss"].item()
@@ -389,7 +393,7 @@ def run_mrs_pipeline(cfg: dict, mrs_path: str):
 
 
 def save_summary(mrf_results: dict, mrs_results: dict):
-    """Save combined results summary for the paper."""
+    """Save the combined results summary for the experiment."""
     fig_dir = ROOT / "results" / "figures"
 
     summary = {
@@ -470,6 +474,7 @@ def main():
     cfg_path = ROOT / "configs" / "config.yaml"
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
+    seed_everything(cfg.get("project", {}).get("seed", 42))
 
     # Step 1: Generate data
     mrf_path, mrs_path = generate_data(cfg)

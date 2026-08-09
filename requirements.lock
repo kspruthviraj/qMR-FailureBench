@@ -1,0 +1,12 @@
+# Environment snapshot used for the 2026-08-08 audit and smoke runs.
+# GPU driver/CUDA runtime is intentionally not encoded here.
+torch==2.12.0
+numpy==2.4.6
+h5py==3.16.0
+scipy==1.17.1
+scikit-learn==1.9.0
+matplotlib==3.10.9
+nibabel==5.4.2
+pyyaml==6.0.3
+tqdm==4.68.1
+pytest==7.4.4

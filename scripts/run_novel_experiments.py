@@ -15,6 +15,7 @@ Experiments:
 """
 
 from __future__ import annotations
+import sys
 
 import json
 import logging
@@ -28,14 +29,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import yaml
 from torch.utils.data import DataLoader, Dataset
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("novel")
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FIG_DIR = ROOT / "results" / "figures"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -111,7 +112,7 @@ def train_novel_model(cfg, mrf_path, n_epochs=30):
     from qMR_Robust.models.resnet1d import ResNet1D
     from qMR_Robust.models.corruption_attribution import EvidentialWithAttribution
 
-    ckpt_path = ROOT / "results" / "checkpoints" / "novel_dual_head.pt"
+    ckpt_path = ROOT / "results" / "checkpoints" / "novel_dual_head_multilabel_v2.pt"
     if ckpt_path.exists():
         logger.info("Novel model checkpoint exists, loading.")
         backbone = ResNet1D(in_channels=2, hidden_dim=128, output_dim=2, dropout=0.1)
@@ -147,7 +148,7 @@ def train_novel_model(cfg, mrf_path, n_epochs=30):
 
             out = model(signals)
             nig = out["nig"]
-            attr_log_probs = out["attribution"]
+            attr_logits = out["attribution"]
 
             # NIG regression loss
             gamma, nu, alpha, beta = nig[...,0], nig[...,1], nig[...,2], nig[...,3]
@@ -160,15 +161,16 @@ def train_novel_model(cfg, mrf_path, n_epochs=30):
             learned_alea = (beta / (alpha - 1.0)).clamp(min=_EPS)
             physics_anchor = (torch.log(learned_alea) - torch.log(target_alea)).pow(2)
 
-            # Attribution loss
+            # Independent multi-label attribution loss. Entangled samples
+            # retain multiple positive labels instead of being normalised to one class.
             attr_targets = torch.stack([
                 (b0.abs() > 1.0).float(),
                 ((b1 - 1.0).abs() > 0.01).float(),
                 (motion.abs() > 0.5).float(),
             ], dim=-1)
-            row_sum = attr_targets.sum(-1, keepdim=True).clamp(min=1.0)
-            attr_targets = attr_targets / row_sum
-            attr_loss = F.kl_div(attr_log_probs, attr_targets, reduction="batchmean")
+            attr_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                attr_logits, attr_targets
+            )
 
             anneal = min(1.0, epoch / max(15, 1))
             # Regression loss gets full weight; attribution is auxiliary with small coeff
@@ -176,7 +178,7 @@ def train_novel_model(cfg, mrf_path, n_epochs=30):
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
             epoch_loss += loss.item()
             n_b += 1
@@ -235,7 +237,7 @@ def evaluate_novel_model(model, mrf_path):
             all_nu.append(nig[...,1].cpu())
             all_alpha.append(nig[...,2].cpu())
             all_beta.append(nig[...,3].cpu())
-            all_attr_pred.append(out["attribution"].exp().cpu())  # log-probs → probs
+            all_attr_pred.append(torch.sigmoid(out["attribution"]).cpu())
             all_targets.append(targets)
             all_b0.append(b0)
             all_b1.append(b1)

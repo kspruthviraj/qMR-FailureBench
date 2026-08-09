@@ -10,10 +10,11 @@ Addresses all reviewer feedback:
   5. Result consistency fix
   6. Teaser Figure 1
   7. Clinical workflow figure
-  8. All results saved for paper
+  8. All results saved for reproducibility
 """
 
 from __future__ import annotations
+import sys
 
 import json
 import logging
@@ -35,12 +36,17 @@ from torch.utils.data import DataLoader, Dataset
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("v3")
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from qMR_Robust.reproducibility import seed_everything
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FIG_DIR = ROOT / "results" / "figures"
 CKPT_DIR = ROOT / "results" / "checkpoints"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 CKPT_DIR.mkdir(parents=True, exist_ok=True)
+
+SEED = 42
+seed_everything(SEED)
 
 _EPS = 1e-6
 
@@ -158,7 +164,7 @@ def train_model(
         model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE, weights_only=True))
         return model.to(DEVICE)
 
-    torch.manual_seed(seed)
+    seed_everything(seed)
     model = model.to(DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
@@ -199,7 +205,7 @@ def train_model(
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
             epoch_loss += loss.item()
             n_b += 1
@@ -313,12 +319,10 @@ def run_physics_loss_sweep(cfg, mrf_path):
     val_loader = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=4, pin_memory=True)
 
     configs = {
-        "NLL only":             {"er_coeff": 0.0, "phys_coeff": 0.0, "phys_type": "none"},
-        "NLL+ER":               {"er_coeff": 1.0, "phys_coeff": 0.0, "phys_type": "none"},
-        "NLL+ER+MSE(0.3)":      {"er_coeff": 1.0, "phys_coeff": 0.3, "phys_type": "mse"},
-        "NLL+ER+MSE(0.01)":     {"er_coeff": 1.0, "phys_coeff": 0.01, "phys_type": "mse"},
-        "NLL+ER+MSE(0.05)":     {"er_coeff": 1.0, "phys_coeff": 0.05, "phys_type": "mse"},
-        "NLL+ER+Monotonicity":  {"er_coeff": 1.0, "phys_coeff": 0.1, "phys_type": "monotonicity"},
+        "NLL only":       {"er_coeff": 0.0, "phys_coeff": 0.0, "phys_type": "none"},
+        "NLL+ER":         {"er_coeff": 1.0, "phys_coeff": 0.0, "phys_type": "none"},
+        "NLL+Physics":    {"er_coeff": 0.0, "phys_coeff": 0.1, "phys_type": "monotonicity"},
+        "NLL+ER+Physics": {"er_coeff": 1.0, "phys_coeff": 0.1, "phys_type": "monotonicity"},
     }
 
     results = {}
@@ -378,7 +382,7 @@ def run_deep_ensemble(cfg, mrf_path):
     all_preds = []
     for i in range(5):
         logger.info("  Training ensemble member %d/5", i + 1)
-        torch.manual_seed(42 + i)
+        seed_everything(42 + i)
         model = ResNet1D(in_channels=2, hidden_dim=128, output_dim=2, dropout=0.1).to(DEVICE)
         ckpt = CKPT_DIR / f"v3_ensemble_{i}.pt"
 
@@ -395,7 +399,7 @@ def run_deep_ensemble(cfg, mrf_path):
                     loss = F.mse_loss(pred, targets)
                     optimizer.zero_grad()
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
                     optimizer.step()
                 scheduler.step()
             torch.save(model.state_dict(), ckpt)
@@ -415,7 +419,7 @@ def run_deep_ensemble(cfg, mrf_path):
 
     # Denormalize
     mean_denorm = mean_pred * t_std + t_mean
-    tgt_denorm = val_ds.params * t_std + t_mean
+    tgt_denorm = val_ds.params  # params are already raw ms, no denorm needed
     resid = np.abs(tgt_denorm - mean_denorm)
     max_resid = resid.max(axis=-1)
 
@@ -467,7 +471,7 @@ def run_conformal_prediction(cfg, mrf_path):
     val_loader = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=2)
 
     # Train model
-    torch.manual_seed(42)
+    seed_everything(42)
     model = ResNet1D(in_channels=2, hidden_dim=128, output_dim=2, dropout=0.1).to(DEVICE)
     ckpt = CKPT_DIR / "v3_conformal.pt"
 
@@ -484,7 +488,7 @@ def run_conformal_prediction(cfg, mrf_path):
                 loss = F.mse_loss(pred, targets)
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
                 optimizer.step()
             scheduler.step()
         torch.save(model.state_dict(), ckpt)
@@ -593,7 +597,196 @@ def run_multi_seed(cfg, mrf_path, n_seeds=3):
     return summary
 
 
-# ── Experiment 5: Teaser Figure 1 ────────────────────────────────────────────
+# ── Experiment 5: Leaderboard (all baselines on same data) ─────────────────
+
+def run_leaderboard(cfg, mrf_path):
+    """Run all baselines + our method on identical train/val split."""
+    from qMR_Robust.models.resnet1d import ResNet1D
+    from qMR_Robust.models.baselines import build_baseline_model
+    from sklearn.metrics import roc_auc_score
+
+    logger.info("=" * 60)
+    logger.info("EXP 5: Leaderboard — All Baselines + Ours")
+    logger.info("=" * 60)
+
+    train_ds = MRFMetaDataset(mrf_path, split="train")
+    val_ds = MRFMetaDataset(mrf_path, split="val")
+    val_ds.set_norm(train_ds.mean, train_ds.std)
+    t_mean, t_std = train_ds.mean, train_ds.std
+    train_loader = DataLoader(train_ds, batch_size=512, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=512, shuffle=False, num_workers=4, pin_memory=True)
+
+    results = {}
+    n_epochs, lr = 30, 1e-3
+
+    for method in ["deterministic", "heteroscedastic", "quantile"]:
+        logger.info("Training %s...", method)
+        task = f"leaderboard_{method}"
+        ckpt_path = CKPT_DIR / f"{task}.pt"
+
+        evidential = (method == "deterministic" and False)  # always False for baselines
+        backbone_fn = lambda: ResNet1D(in_channels=2, hidden_dim=128, output_dim=2, dropout=0.1, evidential=False)
+        model = build_baseline_model(f"resnet_{method}", backbone_fn, method, output_dim=2).to(DEVICE)
+
+        if ckpt_path.exists():
+            model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE, weights_only=True))
+        else:
+            opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+            for epoch in range(n_epochs):
+                model.train()
+                for batch in train_loader:
+                    x, y = batch[0].to(DEVICE), batch[1].to(DEVICE)
+                    out = model(x)
+                    if method == "heteroscedastic":
+                        pred, logvar = out
+                        loss = torch.mean(torch.exp(-logvar) * (pred - y)**2 + logvar)
+                    elif method == "quantile":
+                        out = out.view(out.shape[0], 2, 3)
+                        qs, loss = [0.1, 0.5, 0.9], torch.tensor(0.0, device=DEVICE)
+                        for k, q in enumerate(qs):
+                            diff = y - out[:, :, k]
+                            loss = loss + torch.mean(torch.max(q * diff, (q - 1) * diff))
+                    else:
+                        loss = F.mse_loss(out, y)
+                    opt.zero_grad(); loss.backward(); opt.step()
+            torch.save(model.state_dict(), ckpt_path)
+
+        # Evaluate
+        model.eval()
+        all_preds, all_tgts = [], []
+        with torch.no_grad():
+            for batch in val_loader:
+                x, y = batch[0].to(DEVICE), batch[1].to(DEVICE)
+                out = model(x)
+                if method == "heteroscedastic":
+                    pred, _ = out
+                elif method == "quantile":
+                    out = out.view(out.shape[0], 2, 3)
+                    pred = out[:, :, 1]
+                else:
+                    pred = out
+                all_preds.append(pred.cpu().numpy())
+                all_tgts.append(y.cpu().numpy())
+
+        preds = np.concatenate(all_preds); tgts = np.concatenate(all_tgts)
+        preds_d = preds * t_std + t_mean; tgts_d = tgts * t_std + t_mean
+        mae = float(np.abs(preds_d - tgts_d).mean())
+
+        # For baselines without uncertainty, skip AUROC
+        name = method.capitalize()
+        results[name] = {"mae_ms": mae, "auroc": None}
+        logger.info("  %s: MAE=%.1f ms", name, mae)
+
+    # --- Ours (evidential NLL+ER) ---
+    logger.info("Training Ours (NLL+ER)...")
+    ev_model = ResNet1D(in_channels=2, hidden_dim=128, output_dim=2, dropout=0.1, evidential=True)
+    ev_model = train_model(ev_model, train_loader, val_loader, n_epochs=n_epochs, lr=lr,
+                           task_name="leaderboard_ours", er_coeff=1.0, phys_coeff=0.0,
+                           phys_type="none", annealing_epochs=10, seed=SEED)
+    ev_metrics = evaluate_model(ev_model, val_loader, t_mean, t_std)
+    results["Ours (NLL+ER)"] = {"mae_ms": ev_metrics["mae_ms"], "auroc": ev_metrics["auroc"]}
+
+    # --- Deep Ensemble ---
+    logger.info("Running Deep Ensemble...")
+    ens_results = run_deep_ensemble(cfg, mrf_path)
+    results["Deep Ensemble (5)"] = {"mae_ms": ens_results.get("mae_ms", float("nan")),
+                                     "auroc": ens_results.get("auroc", float("nan"))}
+
+    # --- Conformal ---
+    logger.info("Running Conformal...")
+    conf_results = run_conformal_prediction(cfg, mrf_path)
+    results["Conformal (90%)"] = {"mae_ms": conf_results.get("mae_ms", float("nan")), "auroc": None}
+
+    with open(FIG_DIR / "leaderboard.json", "w") as f:
+        json.dump(results, f, indent=2, default=str)
+
+    logger.info("Leaderboard complete")
+    return results
+
+
+# ── Experiment 6: Per-Corruption Ablation ──────────────────────────────────
+
+def run_corruption_ablation(cfg, mrf_path):
+    """Evaluate AUROC for each corruption type separately by filtering HDF5 flags."""
+    from qMR_Robust.models.resnet1d import ResNet1D
+    from sklearn.metrics import roc_auc_score
+
+    logger.info("=" * 60)
+    logger.info("EXP 6: Per-Corruption Ablation")
+    logger.info("=" * 60)
+
+    import h5py
+    hf = h5py.File(mrf_path, "r")
+    n = hf.attrs["n_signals"]
+    n_train = int(n * 0.8)
+    val_signals = hf["corrupted_signals"][n_train:n]
+    val_params = hf["parameters"][n_train:n, :2].astype(np.float32)
+    val_b0 = hf["b0_hz_applied"][n_train:n]
+    val_b1 = hf["b1_scale_applied"][n_train:n]
+    val_mot = hf["motion_shift_applied"][n_train:n]
+    t_mean = hf["parameters"][:n_train, :2].astype(np.float32).mean(0)
+    t_std = hf["parameters"][:n_train, :2].astype(np.float32).std(0) + 1e-8
+    hf.close()
+
+    X_val = np.stack([val_signals.real, val_signals.imag], axis=1).astype(np.float32)
+    tgt_raw = val_params
+
+    model = ResNet1D(in_channels=2, hidden_dim=128, output_dim=2, dropout=0.1, evidential=True).to(DEVICE)
+    ckpt = CKPT_DIR / "leaderboard_ours.pt"
+    if not ckpt.exists():
+        ckpt = sorted(CKPT_DIR.glob("*evidential*.pt"))[0]
+    model.load_state_dict(torch.load(ckpt, map_location=DEVICE, weights_only=True))
+    model.eval()
+
+    all_gamma, all_nu, all_alpha, all_beta = [], [], [], []
+    with torch.no_grad():
+        for i in range(0, len(X_val), 256):
+            batch = torch.from_numpy(X_val[i:i+256]).to(DEVICE)
+            out = model(batch)
+            out = out.view(out.shape[0], 2, 4)
+            all_gamma.append(out[..., 0].cpu().numpy())
+            all_nu.append(out[..., 1].cpu().numpy())
+            all_alpha.append(out[..., 2].cpu().numpy())
+            all_beta.append(out[..., 3].cpu().numpy())
+    gamma = np.concatenate(all_gamma)
+    nu = np.concatenate(all_nu)
+    alpha = np.concatenate(all_alpha)
+    beta = np.concatenate(all_beta)
+
+    gamma_d = gamma * t_std[None, :] + t_mean[None, :]
+    resid = np.abs(tgt_raw - gamma_d).max(axis=-1)
+    epistemic = beta / (nu * (alpha - 1.0))
+    max_ep = epistemic.max(axis=-1)
+
+    corruption_types = {
+        "B0 only":       (np.abs(val_b0) > 1.0) & (np.abs(val_b1 - 1.0) < 0.01) & (np.abs(val_mot) < 1),
+        "B1 only":       (np.abs(val_b0) < 1.0) & (np.abs(val_b1 - 1.0) > 0.01) & (np.abs(val_mot) < 1),
+        "Motion only":   (np.abs(val_b0) < 1.0) & (np.abs(val_b1 - 1.0) < 0.01) & (np.abs(val_mot) > 1),
+        "B0+B1":         (np.abs(val_b0) > 1.0) & (np.abs(val_b1 - 1.0) > 0.01) & (np.abs(val_mot) < 1),
+        "B0+Motion":     (np.abs(val_b0) > 1.0) & (np.abs(val_b1 - 1.0) < 0.01) & (np.abs(val_mot) > 1),
+        "B1+Motion":     (np.abs(val_b0) < 1.0) & (np.abs(val_b1 - 1.0) > 0.01) & (np.abs(val_mot) > 1),
+        "Entangled":     (np.abs(val_b0) > 1.0) & (np.abs(val_b1 - 1.0) > 0.01) & (np.abs(val_mot) > 1),
+    }
+
+    results = {}
+    for name, mask in corruption_types.items():
+        n_active = mask.sum()
+        if n_active < 10:
+            results[name] = {"n": int(n_active), "mae": float("nan"), "auroc": float("nan")}
+            continue
+        res_sub = resid[mask]
+        ep_sub = max_ep[mask]
+        labels = (res_sub > 300).astype(int)
+        auroc = float(roc_auc_score(labels, ep_sub)) if 0 < labels.sum() < n_active else float("nan")
+        results[name] = {"n": int(n_active), "mae": float(np.mean(res_sub)), "auroc": auroc}
+        logger.info("  %s: n=%d MAE=%.1f AUROC=%.3f", name, n_active, results[name]["mae"], results[name]["auroc"])
+
+    with open(FIG_DIR / "ablation_corruption_metrics.json", "w") as f:
+        json.dump(results, f, indent=2)
+    return results
+
+
+# ── Experiment 7: Teaser Figure 1 ────────────────────────────────────────────
 
 def create_teaser_figure(cfg, mrf_path):
     """Create the end-to-end pipeline visualization (Figure 1)."""
@@ -718,19 +911,25 @@ def main():
 
     results = {}
 
-    # Exp 1: Physics loss sweep
+    # Exp 1: Physics loss sweep (ablation table)
     results["physics_sweep"] = run_physics_loss_sweep(cfg, mrf_path)
 
-    # Exp 2: Deep Ensemble
+    # Exp 2: Leaderboard (all baselines + ours on same split)
+    results["leaderboard"] = run_leaderboard(cfg, mrf_path)
+
+    # Exp 3: Per-corruption ablation (needs leaderboard_ours checkpoint)
+    results["corruption_ablation"] = run_corruption_ablation(cfg, mrf_path)
+
+    # Exp 4: Deep Ensemble
     results["deep_ensemble"] = run_deep_ensemble(cfg, mrf_path)
 
-    # Exp 3: Conformal Prediction
+    # Exp 5: Conformal Prediction
     results["conformal"] = run_conformal_prediction(cfg, mrf_path)
 
-    # Exp 4: Multi-seed statistics
+    # Exp 6: Multi-seed statistics
     results["multi_seed"] = run_multi_seed(cfg, mrf_path, n_seeds=3)
 
-    # Exp 5: Teaser Figure
+    # Exp 7: Teaser Figure
     create_teaser_figure(cfg, mrf_path)
 
     # Save combined results

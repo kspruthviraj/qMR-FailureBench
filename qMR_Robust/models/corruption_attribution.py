@@ -44,8 +44,8 @@ class CorruptionAttributionHead(nn.Module):
         )
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        """Return log-probabilities for corruption sources (B, 3)."""
-        return F.log_softmax(self.fc(features), dim=-1)
+        """Return independent corruption logits for sources (B, 3)."""
+        return self.fc(features)
 
 
 class EvidentialWithAttribution(nn.Module):
@@ -102,7 +102,7 @@ class EvidentialWithAttribution(nn.Module):
         -------
         dict with:
             'nig': Tensor (B, D, 4) — [γ, ν, α, β]
-            'attribution': Tensor (B, 3) — log-probabilities [B0, B1, motion]
+            'attribution': Tensor (B, 3) — independent logits [B0, B1, motion]
             'features': Tensor (B, feature_dim) — backbone features
         """
         features = self.encode(x)
@@ -158,33 +158,34 @@ def compute_attribution_targets(
 
     targets = torch.stack([p_b0, p_b1, p_motion], dim=-1)
 
-    # Normalize to sum to 1 (soft targets)
-    row_sum = targets.sum(dim=-1, keepdim=True).clamp(min=1.0)
-    return targets / row_sum
+    # Keep independent binary targets: entangled samples legitimately have
+    # more than one active source.
+    return targets
 
 
 def attribution_loss(
-    log_probs: torch.Tensor,
+    logits: torch.Tensor,
     targets: torch.Tensor,
+    pos_weight: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """KL divergence loss for corruption attribution.
+    """Independent multi-label BCE loss for corruption attribution.
 
     Parameters
     ----------
-    log_probs : (B, 3) — predicted log-probabilities
-    targets : (B, 3) — soft target probabilities
+    logits : (B, 3) — one logit per source
+    targets : (B, 3) — independent binary targets
 
     Returns
     -------
     loss : scalar
     """
-    return F.kl_div(log_probs, targets, reduction="batchmean")
+    return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pos_weight)
 
 
 def joint_loss(
     nig_params: torch.Tensor,
     targets_reg: torch.Tensor,
-    attribution_log_probs: torch.Tensor,
+    attribution_logits: torch.Tensor,
     attribution_targets: torch.Tensor,
     epoch: int = 0,
     reg_coeff: float = 1.0,
@@ -196,7 +197,7 @@ def joint_loss(
     Combines:
     1. NIG NLL loss for regression
     2. Evidential regularizer
-    3. Attribution KL loss (with annealing)
+    3. Independent multi-label attribution BCE loss (with annealing)
     """
     from qMR_Robust.models.losses import evidential_regression_loss
 
@@ -207,7 +208,7 @@ def joint_loss(
     )
 
     # Attribution loss
-    attr_loss = attribution_loss(attribution_log_probs, attribution_targets)
+    attr_loss = attribution_loss(attribution_logits, attribution_targets)
 
     # Anneal attribution loss too
     anneal_weight = min(1.0, epoch / max(annealing_epochs, 1))

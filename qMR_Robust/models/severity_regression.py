@@ -138,11 +138,19 @@ def counterfactual_correction(
     estimated_b0: float,
     estimated_b1: float,
     estimated_motion: float,
+    dwell_time_ms: float = 12.0,
 ) -> np.ndarray:
-    """Apply inverse corruption to correct a signal.
+    """Apply inverse corruption to correct a signal (approximate).
 
     Given estimated corruption parameters, apply the inverse operation
     to recover the (approximately) clean signal.
+
+    Limitations
+    -----------
+    * B1 inversion by amplitude division is only exact when B1 was applied
+      as a post-hoc scale. When B1 was applied via flip-angle re-simulation,
+      amplitude inversion is an approximation.
+    * Motion inversion with ``-δ`` only undoes the global linear phase part.
 
     Parameters
     ----------
@@ -154,27 +162,26 @@ def counterfactual_correction(
         Estimated B1 scale (will apply 1/λ).
     estimated_motion : float
         Estimated motion shift in voxels (will apply -δ).
-
-    Returns
-    -------
-    corrected : ndarray (L,) complex64
-        Corrected signal.
+    dwell_time_ms : float
+        Inter-sample time for B0 phase (default TR ≈ 12 ms).
     """
-    corruptor = PhysicsCorruptor.__new__(PhysicsCorruptor)
+    corrected = np.asarray(signal, dtype=np.complex64).copy()
 
-    corrected = signal.copy()
-
-    # Invert B1 (scale by 1/λ)
+    # Invert B1 (scale by 1/λ) — exact only for amplitude-mode B1
     if abs(estimated_b1 - 1.0) > 0.01:
-        corrected = corrected / max(estimated_b1, 0.1)
+        corrected = (corrected / max(float(estimated_b1), 0.1)).astype(np.complex64)
 
-    # Invert B0 (apply -Δf)
+    # Invert B0 (apply -Δf) with physically meaningful dwell (TR)
     if abs(estimated_b0) > 1.0:
-        corrected = corruptor.apply_b0_off_resonance(corrected, -estimated_b0)
+        corrected = PhysicsCorruptor.apply_b0_off_resonance(
+            corrected, -float(estimated_b0), dwell_time_ms=dwell_time_ms,
+        )
 
-    # Invert motion (apply -δ)
+    # Invert motion (approximate reverse of multi-shot phase)
     if abs(estimated_motion) > 0.5:
-        corrected = corruptor.apply_kspace_motion_artifact(corrected, shift_y=-int(estimated_motion))
+        corrected = PhysicsCorruptor.apply_kspace_motion_artifact(
+            corrected, shift_y=-int(estimated_motion),
+        )
 
     return corrected
 
